@@ -1,6 +1,7 @@
 package command
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -10,66 +11,6 @@ import (
 	"github.com/hashicorp/terraform/helper/copy"
 	"github.com/mitchellh/cli"
 )
-
-func TestInit(t *testing.T) {
-	dir := tempDir(t)
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		testFixturePath("init"),
-		dir,
-	}
-	if code := c.Run(args); code != 0 {
-		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, "hello.tf")); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-}
-
-func TestInit_cwd(t *testing.T) {
-	dir := tempDir(t)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	// Change to the temporary directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	defer os.Chdir(cwd)
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		testFixturePath("init"),
-	}
-	if code := c.Run(args); code != 0 {
-		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
-	}
-
-	if _, err := os.Stat("hello.tf"); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-}
 
 func TestInit_empty(t *testing.T) {
 	// Create a temporary working directory that is empty
@@ -110,48 +51,6 @@ func TestInit_multipleArgs(t *testing.T) {
 	}
 }
 
-// https://github.com/hashicorp/terraform/issues/518
-func TestInit_dstInSrc(t *testing.T) {
-	dir := tempDir(t)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	// Change to the temporary directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	defer os.Chdir(cwd)
-
-	if _, err := os.Create("issue518.tf"); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		".",
-		"foo",
-	}
-	if code := c.Run(args); code != 0 {
-		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, "foo", "issue518.tf")); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-}
-
 func TestInit_get(t *testing.T) {
 	// Create a temporary working directory that is empty
 	td := tempDir(t)
@@ -173,39 +72,6 @@ func TestInit_get(t *testing.T) {
 	}
 
 	// Check output
-	output := ui.OutputWriter.String()
-	if !strings.Contains(output, "Get: file://") {
-		t.Fatalf("doesn't look like get: %s", output)
-	}
-}
-
-func TestInit_copyGet(t *testing.T) {
-	// Create a temporary working directory that is empty
-	td := tempDir(t)
-	os.MkdirAll(td, 0755)
-	defer os.RemoveAll(td)
-	defer testChdir(t, td)()
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		testFixturePath("init-get"),
-	}
-	if code := c.Run(args); code != 0 {
-		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
-	}
-
-	// Check copy
-	if _, err := os.Stat("main.tf"); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
 	output := ui.OutputWriter.String()
 	if !strings.Contains(output, "Get: file://") {
 		t.Fatalf("doesn't look like get: %s", output)
@@ -377,12 +243,15 @@ func TestInit_backendConfigKV(t *testing.T) {
 	}
 }
 
-func TestInit_copyBackendDst(t *testing.T) {
+func TestInit_targetSubdir(t *testing.T) {
 	// Create a temporary working directory that is empty
 	td := tempDir(t)
 	os.MkdirAll(td, 0755)
 	defer os.RemoveAll(td)
 	defer testChdir(t, td)()
+
+	// copy the source into a subdir
+	copy.CopyDir(testFixturePath("init-backend"), filepath.Join(td, "source"))
 
 	ui := new(cli.MockUi)
 	c := &InitCommand{
@@ -392,16 +261,22 @@ func TestInit_copyBackendDst(t *testing.T) {
 		},
 	}
 
+	pwd, _ := os.Getwd()
+	fmt.Println("PWD:", pwd)
+
 	args := []string{
-		testFixturePath("init-backend"),
-		"dst",
+		"source",
 	}
 	if code := c.Run(args); code != 0 {
 		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
 	}
 
-	if _, err := os.Stat(filepath.Join(
-		"dst", DefaultDataDir, DefaultStateFilename)); err != nil {
+	if _, err := os.Stat(filepath.Join(td, "source", DefaultDataDir, DefaultStateFilename)); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// a data directory should not have been added to out working dir
+	if _, err := os.Stat(filepath.Join(td, DefaultDataDir)); !os.IsNotExist(err) {
 		t.Fatalf("err: %s", err)
 	}
 }
@@ -533,149 +408,3 @@ func TestInit_inputFalse(t *testing.T) {
 		t.Fatal("init should have failed", ui.OutputWriter)
 	}
 }
-
-/*
-func TestInit_remoteState(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-
-	s := terraform.NewState()
-	conf, srv := testRemoteState(t, s, 200)
-	defer srv.Close()
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		"-backend", "HTTP",
-		"-backend-config", "address=" + conf.Config["address"],
-		testFixturePath("init"),
-		tmp,
-	}
-	if code := c.Run(args); code != 0 {
-		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
-	}
-
-	if _, err := os.Stat(filepath.Join(tmp, "hello.tf")); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(tmp, DefaultDataDir, DefaultStateFilename)); err != nil {
-		t.Fatalf("missing state: %s", err)
-	}
-}
-
-func TestInit_remoteStateSubdir(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-	subdir := filepath.Join(tmp, "subdir")
-
-	s := terraform.NewState()
-	conf, srv := testRemoteState(t, s, 200)
-	defer srv.Close()
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		"-backend", "http",
-		"-backend-config", "address=" + conf.Config["address"],
-		testFixturePath("init"),
-		subdir,
-	}
-	if code := c.Run(args); code != 0 {
-		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
-	}
-
-	if _, err := os.Stat(filepath.Join(subdir, "hello.tf")); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(subdir, DefaultDataDir, DefaultStateFilename)); err != nil {
-		t.Fatalf("missing state: %s", err)
-	}
-}
-
-func TestInit_remoteStateWithLocal(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-
-	statePath := filepath.Join(tmp, DefaultStateFilename)
-
-	// Write some state
-	f, err := os.Create(statePath)
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	err = terraform.WriteState(testState(), f)
-	f.Close()
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		"-backend", "http",
-		"-backend-config", "address=http://google.com",
-		testFixturePath("init"),
-	}
-	if code := c.Run(args); code == 0 {
-		t.Fatalf("should have failed: \n%s", ui.OutputWriter.String())
-	}
-}
-
-func TestInit_remoteStateWithRemote(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-
-	statePath := filepath.Join(tmp, DefaultDataDir, DefaultStateFilename)
-	if err := os.MkdirAll(filepath.Dir(statePath), 0755); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	// Write some state
-	f, err := os.Create(statePath)
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	err = terraform.WriteState(testState(), f)
-	f.Close()
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	ui := new(cli.MockUi)
-	c := &InitCommand{
-		Meta: Meta{
-			ContextOpts: testCtxConfig(testProvider()),
-			Ui:          ui,
-		},
-	}
-
-	args := []string{
-		"-backend", "http",
-		"-backend-config", "address=http://google.com",
-		testFixturePath("init"),
-	}
-	if code := c.Run(args); code == 0 {
-		t.Fatalf("should have failed: \n%s", ui.OutputWriter.String())
-	}
-}
-*/
